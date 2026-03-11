@@ -76,49 +76,82 @@ def apply_clinical_bandpass(ecg, fs):
 #%% 
 #  R peak detection
 # ---------------------------
-def detect_r_peaks(ecg_filtered, fs):
-
-    peak_height = np.mean(ecg_filtered) + 2*np.std(ecg_filtered)
-
+def detect_r_peaks(ecg_chunk, fs, global_mean, global_std):
+    """
+    Detects R-peaks using thresholds derived from the GLOBAL recording,
+    preventing localized motion artifacts from blinding the algorithm.
+    """
+    # 1. Non-linear Amplification to crush noise
+    ecg_sq = ecg_chunk ** 2
+    
+    # 2. Dynamic Thresholds based on full 24-hour recording
+    peak_height = global_mean + 1.5 * global_std
+    dynamic_prominence = 0.6 * global_std
+    
     min_distance = int(0.3 * fs)
 
     locs, _ = signal.find_peaks(
-        ecg_filtered,
+        ecg_sq,
         height=peak_height,
         distance=min_distance,
-        prominence=0.25
+        prominence=dynamic_prominence
     )
 
     return locs
 
-#%%
 # Chunk-based detection
+#  R peak detection (Full Pan-Tompkins Envelope)
 # ---------------------------
 def detect_r_peaks_full_recording(ecg_filtered, fs, chunk_seconds=60):
+    """
+    True Pan-Tompkins QRS Detection Pipeline.
+    Transforms the ECG into a smooth energy envelope, rendering 
+    high-frequency muscle artifacts completely invisible to the detector.
+    """
+    # 1. Derivative (Enhances steep QRS slopes, ignores baseline)
+    ecg_diff = np.diff(ecg_filtered, prepend=ecg_filtered[0])
+    
+    # 2. Squaring (Non-linear amplification of those steep slopes)
+    ecg_sq = ecg_diff ** 2
+    
+    # 3. Moving Window Integration (The Artifact Crusher)
+    # Averages out the jagged noise, turning QRS complexes into solid 'lumps'
+    window_len = int(0.15 * fs) # 150 ms physiological QRS window
+    window = np.ones(window_len) / window_len
+    
+    # np.convolve is exponentially faster than pd.Series.rolling
+    envelope = np.convolve(ecg_sq, window, mode='same')
+    
+    # 4. Global Thresholding on the Smooth Envelope
+    # Because the noise is now physically flattened out, std() is completely safe to use again.
+    global_mean = np.mean(envelope)
+    global_std = np.std(envelope)
+    
+    peak_height = global_mean + 1.0 * global_std
+    dynamic_prominence = 0.5 * global_std
 
     chunk_samples = int(chunk_seconds * fs)
-    total_samples = len(ecg_filtered)
-
+    total_samples = len(envelope)
     all_locs = []
-
     start = 0
 
     while start < total_samples:
-
         end = min(start + chunk_samples, total_samples)
+        
+        # We run the peak detector on the ENVELOPE, not the raw ECG!
+        env_chunk = envelope[start:end]
 
-        ecg_chunk = ecg_filtered[start:end]
-
-        locs_chunk = detect_r_peaks(ecg_chunk, fs)
-
-        locs_chunk = locs_chunk + start
-
-        all_locs.extend(locs_chunk)
-
+        locs_chunk, _ = signal.find_peaks(
+            env_chunk,
+            height=peak_height,
+            distance=int(0.3 * fs), # 300 ms refractory
+            prominence=dynamic_prominence
+        )
+        
+        all_locs.extend(locs_chunk + start)
         start += chunk_samples
 
     all_locs = np.array(all_locs)
-
     print("Detected beats:", len(all_locs))
 
     return all_locs
