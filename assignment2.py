@@ -65,7 +65,7 @@ def read_and_clean_ecg_mat(path, plotresult=False):
 # ---------------------------
 def apply_clinical_bandpass(ecg, fs):
 
-    b_low, a_low = signal.butter(4, 15, 'low', fs=fs)
+    b_low, a_low = signal.butter(8, 40, 'low', fs=fs)
     b_high, a_high = signal.butter(2, 0.5, 'high', fs=fs)
 
     filtered = signal.filtfilt(b_low, a_low, ecg)
@@ -76,33 +76,72 @@ def apply_clinical_bandpass(ecg, fs):
 #%% 
 #  R peak detection
 # ---------------------------
-def detect_r_peaks(ecg_chunk, fs, global_mean, global_std):
+def detect_r_peaks(ecg_chunk, fs, plotresult=False, t_chunk=None):
     """
-    Detects R-peaks using thresholds derived from the GLOBAL recording,
-    preventing localized motion artifacts from blinding the algorithm.
+    Detect R-peaks using a simplified Pan-Tompkins approach:
+    derivative -> square -> moving window integration -> peak detection
     """
-    # 1. Non-linear Amplification to crush noise
-    ecg_sq = ecg_chunk ** 2
-    
-    # 2. Dynamic Thresholds based on full 24-hour recording
-    peak_height = global_mean + 1.5 * global_std
-    dynamic_prominence = 0.6 * global_std
-    
+    # 1. Derivative: emphasizes steep QRS slopes
+    ecg_diff = np.diff(ecg_chunk, prepend=ecg_chunk[0])
+
+    # 2. Square: makes all values positive and boosts large slopes
+    ecg_sq = ecg_diff ** 2
+
+    # 3. Moving window integration: smooth QRS energy envelope
+    window_len = int(0.12 * fs)   # 120 ms
+    window = np.ones(window_len) / window_len
+    envelope = np.convolve(ecg_sq, window, mode='same')
+
+    # 4. Adaptive thresholds on this chunk
+    peak_height = np.mean(envelope) + 1.0 * np.std(envelope)
+    dynamic_prominence = 0.5 * np.std(envelope)
     min_distance = int(0.3 * fs)
 
-    locs, _ = signal.find_peaks(
-        ecg_sq,
+    locs_env, _ = signal.find_peaks(
+        envelope,
         height=peak_height,
         distance=min_distance,
         prominence=dynamic_prominence
     )
 
-    return locs
+    # 5. Refine: find actual R-peak in original ECG near each envelope peak
+    search_radius = int(0.08 * fs)   # ±80 ms
+    locs_r = []
+
+    for loc in locs_env:
+        start = max(0, loc - search_radius)
+        end = min(len(ecg_chunk), loc + search_radius)
+
+        local_peak = np.argmax(ecg_chunk[start:end]) + start
+        locs_r.append(local_peak)
+
+    locs_r = np.unique(np.array(locs_r))
+
+    if plotresult and t_chunk is not None:
+        fig, ax = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+
+        ax[0].plot(t_chunk, ecg_chunk)
+        ax[0].plot(t_chunk[locs_r], ecg_chunk[locs_r], 'r*')
+        ax[0].set_title("Filtered ECG with detected R-peaks")
+        ax[0].set_ylabel("ECG (mV)")
+        ax[0].grid(True)
+
+        ax[1].plot(t_chunk, envelope)
+        ax[1].plot(t_chunk[locs_env], envelope[locs_env], 'ko')
+        ax[1].set_title("QRS envelope")
+        ax[1].set_ylabel("Energy")
+        ax[1].set_xlabel("Time")
+        ax[1].grid(True)
+
+        plt.tight_layout()
+        plt.show()
+
+    return locs_r, envelope
 
 # Chunk-based detection
 #  R peak detection (Full Pan-Tompkins Envelope)
 # ---------------------------
-def detect_r_peaks_full_recording(ecg_filtered, fs, chunk_seconds=60):
+# def detect_r_peaks_full_recording(ecg_filtered, fs, chunk_seconds=60):
     """
     True Pan-Tompkins QRS Detection Pipeline.
     Transforms the ECG into a smooth energy envelope, rendering 
@@ -273,6 +312,29 @@ def plot_qrs_check(ecg, t, locs, fs, start_sec=1000, duration=10):
 
     plt.show()
 
+
+# ----------------------------------------------------------
+# Envelope check
+# ----------------------------------------------------------
+def plot_envelope_check(envelope, t, locs, fs, start_sec=1000, duration=10, title="Envelope check"):
+    start = int(start_sec * fs)
+    end = start + int(duration * fs)
+
+    if end > len(envelope):
+        end = len(envelope)
+
+    mask = (locs >= start) & (locs < end)
+
+    plt.figure(figsize=(12, 3))
+    plt.plot(t[start:end], envelope[start:end], linewidth=1)
+    plt.plot(t[locs[mask]], envelope[locs[mask]], 'ko', markersize=5)
+    plt.title(title)
+    plt.ylabel("Envelope")
+    plt.xlabel("Time")
+    plt.grid(True)
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+    plt.tight_layout()
+    plt.show()
 #%% 
 # 4. EXECUTION PIPELINE paths 
 # ==========================================================
@@ -283,6 +345,7 @@ def plot_qrs_check(ecg, t, locs, fs, start_sec=1000, duration=10):
 path1 = r"/Users/cathelijnedeneke/Desktop/TM 2025:2026/Q3/Advanced signal processing /Erasmus deel/Assignment 2 /004_Groenewoud_PACs+PVCs.mat"
 
 path2 = r"/Users/cathelijnedeneke/Desktop/TM 2025:2026/Q3/Advanced signal processing /Erasmus deel/Assignment 2 /004_Groenewoud_PACs.mat"
+
 
 #%% 
 # uitvoeren
@@ -296,7 +359,7 @@ ecg1, fs1, t1 = read_and_clean_ecg_mat(path1)
 
 filtered1 = apply_clinical_bandpass(ecg1, fs1)
 
-locs1 = detect_r_peaks_full_recording(filtered1, fs1)
+locs1, envelope1 = detect_r_peaks(filtered1, fs1, plotresult=False, t_chunk=t1)
 
 RR1, t_rr1 = compute_rr_intervals(locs1, t1)
 
@@ -308,7 +371,23 @@ plot_rr_variability(rr_stats1, "RR variability – Recording 1")
 
 pac_idx1, t_pac1 = detect_pac(RR1, t_rr1)
 
-plot_qrs_check(filtered1, t1, locs1, fs1)
+plot_qrs_check(
+    filtered1,
+    t1,
+    locs1,
+    fs1,
+    start_sec=1000,
+    duration=10,
+)
+
+plot_envelope_check(
+    envelope1,
+    t1,
+    locs1,
+    fs1,
+    start_sec=1000,
+    duration=10,
+)
 
 
 # ==========================================================
@@ -321,7 +400,12 @@ ecg2, fs2, t2 = read_and_clean_ecg_mat(path2)
 
 filtered2 = apply_clinical_bandpass(ecg2, fs2)
 
-locs2 = detect_r_peaks_full_recording(filtered2, fs2)
+locs2, envelope2 = detect_r_peaks(
+    filtered2,
+    fs2,
+    plotresult=False,
+    t_chunk=t2,
+)
 
 RR2, t_rr2 = compute_rr_intervals(locs2, t2)
 
@@ -333,5 +417,22 @@ plot_rr_variability(rr_stats2, "RR variability – Recording 2")
 
 pac_idx2, t_pac2 = detect_pac(RR2, t_rr2)
 
-plot_qrs_check(filtered2, t2, locs2, fs2)
+plot_qrs_check(
+    filtered2,
+    t2,
+    locs2,
+    fs2,
+    start_sec=1000,
+    duration=10,
+)
+
+plot_envelope_check(
+    envelope2,
+    t2,
+    locs2,
+    fs2,
+    start_sec=1000,
+    duration=10,
+)
 # %%
+
