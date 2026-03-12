@@ -146,7 +146,7 @@ def detect_pac(RR, t_rr, locs, t):
     # Stap 1: Zoek ALLE momenten die aan de PAC regel voldoen
     for i in range(window_size, len(RR) - 1):
         local_median = np.median(RR[i-window_size:i])
-        if RR[i] < 0.85 * local_median and RR[i+1] > 1.15 * local_median:
+        if RR[i] < 0.85 * local_median and RR[i+1] > 1.2 * local_median:
             raw_pac_indices.append(i)
 
     # Stap 2: Filter de opeenvolgende/geclusterde PACs eruit
