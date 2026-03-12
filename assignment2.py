@@ -132,28 +132,88 @@ def plot_rr_variability(rr_stats, title):
     plt.show()
 
 #%%
-# Pathology: PAC Classification
+# PAC detection (Met Isolatie-Filter)
 # ---------------------------
 def detect_pac(RR, t_rr, locs, t):
+    """
+    Detecteert PACs en filtert reeksen eruit. Als de PAC-regel meer dan 
+    1 keer kort achter elkaar wordt getriggerd, wordt dit geclassificeerd 
+    als AF/SVT en verwijderd uit de geïsoleerde PAC-lijst.
+    """
+    raw_pac_indices = []
+    window_size = 5
+
+    # Stap 1: Zoek ALLE momenten die aan de PAC regel voldoen
+    for i in range(window_size, len(RR) - 1):
+        local_median = np.median(RR[i-window_size:i])
+        if RR[i] < 0.85 * local_median and RR[i+1] > 1.15 * local_median:
+            raw_pac_indices.append(i)
+
+    # Stap 2: Filter de opeenvolgende/geclusterde PACs eruit
+    isolated_pac_indices = []
+    for j in range(len(raw_pac_indices)):
+        current_idx = raw_pac_indices[j]
+
+        # Kijk naar de positie van de vorige en volgende PAC
+        prev_idx = raw_pac_indices[j-1] if j > 0 else -999
+        next_idx = raw_pac_indices[j+1] if j < len(raw_pac_indices) - 1 else -999
+
+        # Als de vorige of volgende PAC binnen 2 slagen valt, is het een reeks!
+        if (current_idx - prev_idx <= 2) or (next_idx - current_idx <= 2):
+            continue # Sla over, dit is waarschijnlijk AF of een SVT run
+        else:
+            isolated_pac_indices.append(current_idx)
+
+    # Stap 3: Koppel de ECHTE, geïsoleerde PACs aan de exacte tijd
     pac_locs = []
+    for i in isolated_pac_indices:
+        pac_time = t_rr[i+1]
+        idx = np.where(t[locs] == pac_time)[0]
+        if len(idx) > 0:
+            pac_locs.append(locs[idx[0]])
+
+    pac_locs = np.array(pac_locs)
+
+    print(f"=========================================")
+    print(f"--> RUWE PACs (Inclusief reeksen): {len(raw_pac_indices)}")
+    print(f"--> ECHTE GEÏSOLEERDE PACs:        {len(pac_locs)}")
+    print(f"=========================================")
+
+    return pac_locs
+
+#%%
+# Pathologische AF Detectie
+# ---------------------------
+def detect_af_candidates(RR, t_rr, locs, t):
+    """
+    Klinische detectie van Atriumfibrilleren (AF) gebaseerd op
+    absolute onregelmatigheid. Signaleert prematuriteit (< 80%) 
+    zonder de aanwezigheid van een compensatoire pauze te eisen.
+    """
+    af_locs = []
     window_size = 5
 
     for i in range(window_size, len(RR) - 1):
+        # Bepaal de klinische baseline (mediaan van de laatste 5 slagen)
         local_median = np.median(RR[i-window_size:i])
         
-        # Prematurity (< 85%) followed by compensatory pause (> 115%)
-        if RR[i] < 0.85 * local_median and RR[i+1] > 1.15 * local_median:
-            pac_time = t_rr[i+1]
-            idx = np.where(t[locs] == pac_time)[0]
+        # AF Criterium: Enkel prematuriteit (< 80%), GEEN bovengrens
+        if RR[i] < 0.80 * local_median:
+            
+            # De AF-slag is de depolarisatie die dit korte interval afsluit
+            af_time = t_rr[i+1]
+            
+            idx = np.where(t[locs] == af_time)[0]
             if len(idx) > 0:
-                pac_locs.append(locs[idx[0]])
+                af_locs.append(locs[idx[0]])
 
-    pac_locs = np.array(pac_locs)
+    af_locs = np.array(af_locs)
+    
     print(f"=========================================")
-    print(f"--> CLINICAL PAC BURDEN DETECTED: {len(pac_locs)}")
+    print(f"--> POTENTIËLE AF SLAGEN GEVONDEN: {len(af_locs)}")
     print(f"=========================================")
-    return pac_locs
 
+    return af_locs
 #%%
 # Pathology Visualization: Auto-tracking ECG Plot
 # ---------------------------
@@ -189,12 +249,40 @@ def plot_ecg_with_pac(ecg, t, locs, pac_locs, fs, pac_index=0, window_sec=10):
     plt.show()
 
 #%%
+# Diagnostics: Poincaré Plot (Lorenz Plot)
+# ---------------------------
+def plot_poincare(RR, title="Poincaré Plot"):
+    """
+    Zet het huidige RR-interval (x-as) uit tegen het volgende RR-interval (y-as).
+    Dit is de gouden standaard om AF van PACs te onderscheiden.
+    """
+    # rr_n is de huidige slag, rr_n1 is de volgende slag
+    rr_n = RR[:-1]
+    rr_n1 = RR[1:]
+    
+    plt.figure(figsize=(6, 6))
+    plt.scatter(rr_n, rr_n1, s=3, color='tab:red', alpha=0.3)
+    
+    # Teken de identiteitslijn (x = y). Een perfect regelmatig ritme ligt exact op deze lijn.
+    min_val, max_val = min(RR), max(RR)
+    plt.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5, label="Perfect regelmatig (x=y)")
+    
+    plt.title(f"{title}\n(RR[i] vs RR[i+1])")
+    plt.xlabel("Huidig RR Interval (s)")
+    plt.ylabel("Volgend RR Interval (s)")
+    plt.grid(True, alpha=0.4)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+#%%
 # 3. EXECUTION PIPELINE
 # ==========================================================
 
 # DEFINE PATHS (Ensure these are correct for your local machine)
 path1 = r"/Users/cathelijnedeneke/Desktop/TM 2025:2026/Q3/Advanced signal processing /Erasmus deel/Assignment 2 /004_Groenewoud_PACs+PVCs.mat"
 path2 = r"/Users/cathelijnedeneke/Desktop/TM 2025:2026/Q3/Advanced signal processing /Erasmus deel/Assignment 2 /004_Groenewoud_PACs.mat"
+
 #%%
 # ----------------------------------------------------------
 # Recording 1: Complex Arrhythmia (PACs + PVCs)
@@ -209,8 +297,15 @@ plot_heart_rate(t_rr1, RR1, "Ventricular Rate Profile – Recording 1")
 rr_stats1 = analyze_qrs_regularity(t_rr1, RR1)
 plot_rr_variability(rr_stats1, "Chronotropic Regularity – Recording 1")
 
+# 1. PAC Detectie
 pac_locs1 = detect_pac(RR1, t_rr1, locs1, t1)
 plot_ecg_with_pac(filtered1, t1, locs1, pac_locs1, fs1, pac_index=0)
+
+# 2. AF Detectie (NIEUW)
+af_locs1 = detect_af_candidates(RR1, t_rr1, locs1, t1)
+# Plot de eerste AF slag (index 0) om het verschil met een PAC te zien
+if len(af_locs1) > 0:
+    plot_ecg_with_pac(filtered1, t1, locs1, af_locs1, fs1, pac_index=0)
 
 
 # ----------------------------------------------------------
@@ -226,6 +321,15 @@ plot_heart_rate(t_rr2, RR2, "Ventricular Rate Profile – Recording 2")
 rr_stats2 = analyze_qrs_regularity(t_rr2, RR2)
 plot_rr_variability(rr_stats2, "Chronotropic Regularity – Recording 2")
 
+# 1. PAC Detectie
 pac_locs2 = detect_pac(RR2, t_rr2, locs2, t2)
 plot_ecg_with_pac(filtered2, t2, locs2, pac_locs2, fs2, pac_index=4)
+
+# 2. AF Detectie (NIEUW)
+af_locs2 = detect_af_candidates(RR2, t_rr2, locs2, t2)
+# Plot de eerste AF slag (index 0) om het verschil met een PAC te zien
+if len(af_locs2) > 0:
+    plot_ecg_with_pac(filtered2, t2, locs2, af_locs2, fs2, pac_index=0)
+# %%
+plot_poincare(RR1, "Poincaré Plot – Recording 1 (PACs + PVCs)")
 # %%
