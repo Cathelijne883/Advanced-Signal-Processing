@@ -133,52 +133,24 @@ def plot_rr_variability(rr_stats, title):
 
 #%%
 # PAC detection (Met Isolatie-Filter)
-# ---------------------------
 def detect_pac(RR, t_rr, locs, t):
-    """
-    Detecteert PACs en filtert reeksen eruit. Als de PAC-regel meer dan 
-    1 keer kort achter elkaar wordt getriggerd, wordt dit geclassificeerd 
-    als AF/SVT en verwijderd uit de geïsoleerde PAC-lijst.
-    """
-    raw_pac_indices = []
+    pac_locs = []
     window_size = 5
 
-    # Stap 1: Zoek ALLE momenten die aan de PAC regel voldoen
     for i in range(window_size, len(RR) - 1):
         local_median = np.median(RR[i-window_size:i])
-        if RR[i] < 0.85 * local_median and RR[i+1] > 1.2 * local_median:
-            raw_pac_indices.append(i)
-
-    # Stap 2: Filter de opeenvolgende/geclusterde PACs eruit
-    isolated_pac_indices = []
-    for j in range(len(raw_pac_indices)):
-        current_idx = raw_pac_indices[j]
-
-        # Kijk naar de positie van de vorige en volgende PAC
-        prev_idx = raw_pac_indices[j-1] if j > 0 else -999
-        next_idx = raw_pac_indices[j+1] if j < len(raw_pac_indices) - 1 else -999
-
-        # Als de vorige of volgende PAC binnen 2 slagen valt, is het een reeks!
-        if (current_idx - prev_idx <= 2) or (next_idx - current_idx <= 2):
-            continue # Sla over, dit is waarschijnlijk AF of een SVT run
-        else:
-            isolated_pac_indices.append(current_idx)
-
-    # Stap 3: Koppel de ECHTE, geïsoleerde PACs aan de exacte tijd
-    pac_locs = []
-    for i in isolated_pac_indices:
-        pac_time = t_rr[i+1]
-        idx = np.where(t[locs] == pac_time)[0]
-        if len(idx) > 0:
-            pac_locs.append(locs[idx[0]])
+        
+        # Prematurity (< 85%) followed by compensatory pause (> 115%)
+        if RR[i] < 0.8 * local_median and RR[i+1] > 1.2 * local_median:
+            pac_time = t_rr[i+1]
+            idx = np.where(t[locs] == pac_time)[0]
+            if len(idx) > 0:
+                pac_locs.append(locs[idx[0]])
 
     pac_locs = np.array(pac_locs)
-
     print(f"=========================================")
-    print(f"--> RUWE PACs (Inclusief reeksen): {len(raw_pac_indices)}")
-    print(f"--> ECHTE GEÏSOLEERDE PACs:        {len(pac_locs)}")
+    print(f"--> CLINICAL PAC BURDEN DETECTED: {len(pac_locs)}")
     print(f"=========================================")
-
     return pac_locs
 
 #%%
@@ -276,6 +248,42 @@ def plot_poincare(RR, title="Poincaré Plot"):
     plt.show()
 
 #%%
+def classify_pac_runs(pac_indices):
+    """
+    Classify isolated PACs, couplets, and runs.
+    pac_indices are indices in the RR sequence.
+    """
+    if len(pac_indices) == 0:
+        return [], [], []
+
+    isolated = []
+    couplets = []
+    runs = []
+
+    current_group = [pac_indices[0]]
+
+    for i in range(1, len(pac_indices)):
+        if pac_indices[i] == pac_indices[i-1] + 1:
+            current_group.append(pac_indices[i])
+        else:
+            if len(current_group) == 1:
+                isolated.append(current_group)
+            elif len(current_group) == 2:
+                couplets.append(current_group)
+            else:
+                runs.append(current_group)
+            current_group = [pac_indices[i]]
+
+    # laatste groep opslaan
+    if len(current_group) == 1:
+        isolated.append(current_group)
+    elif len(current_group) == 2:
+        couplets.append(current_group)
+    else:
+        runs.append(current_group)
+
+    return isolated, couplets, runs
+#%%
 # 3. EXECUTION PIPELINE
 # ==========================================================
 
@@ -332,4 +340,10 @@ if len(af_locs2) > 0:
     plot_ecg_with_pac(filtered2, t2, locs2, af_locs2, fs2, pac_index=0)
 # %%
 plot_poincare(RR1, "Poincaré Plot – Recording 1 (PACs + PVCs)")
+# %%
+isolated_pacs, pac_couplets, pac_runs = classify_pac_runs(pac_locs2)
+
+print("Isolated PACs:", len(isolated_pacs))
+print("PAC couplets:", len(pac_couplets))
+print("PAC runs:", len(pac_runs))
 # %%
