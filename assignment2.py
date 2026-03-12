@@ -60,12 +60,11 @@ def read_and_clean_ecg_mat(path, plotresult=False):
     return ecg_clean, fs, t_clean
 
 #%%
-
 # Clinical bandpass filter
 # ---------------------------
 def apply_clinical_bandpass(ecg, fs):
-
-    b_low, a_low = signal.butter(8, 40, 'low', fs=fs)
+    # De lage filter is aangepast naar 15 Hz (orde 4) om spierruis te blokkeren
+    b_low, a_low = signal.butter(4, 15, 'low', fs=fs)
     b_high, a_high = signal.butter(2, 0.5, 'high', fs=fs)
 
     filtered = signal.filtfilt(b_low, a_low, ecg)
@@ -271,24 +270,37 @@ def plot_rr_variability(rr_stats, title):
 #%% 
 # PAC detection
 # ---------------------------
-def detect_pac(RR, t_rr):
 
-    median_rr = np.median(RR)
+def detect_pac(RR, t_rr, locs, t):
+    """
+    Detecteert PACs en koppelt ze direct aan hun absolute locatie 
+    in de originele ECG array om verschuivingen te voorkomen.
+    """
+    pac_locs = []
+    window_size = 5
 
-    pac_indices = []
+    for i in range(window_size, len(RR) - 1):
+        local_median = np.median(RR[i-window_size:i])
 
-    for i in range(len(RR)-1):
+        # RR[i] is het korte interval. De PAC-slag valt aan het EINDE hiervan.
+        # Daarom kijken we naar t_rr[i+1] voor de tijd van de PAC.
+        if RR[i] < 0.85 * local_median and RR[i+1] > 1.15 * local_median:
+            
+            # Pak de exacte timestamp van de prematuur gevallen slag
+            pac_time = t_rr[i+1]
+            
+            # Zoek precies welke index in 'locs' bij deze timestamp hoort
+            idx = np.where(t[locs] == pac_time)[0]
+            if len(idx) > 0:
+                pac_locs.append(locs[idx[0]])
 
-        if RR[i] < 0.8 * median_rr and RR[i+1] > 1.2 * median_rr:
-            pac_indices.append(i)
+    pac_locs = np.array(pac_locs)
 
-    pac_indices = np.array(pac_indices)
+    print(f"=========================================")
+    print(f"--> TOTAAL AANTAL PACs GEVONDEN: {len(pac_locs)}")
+    print(f"=========================================")
 
-    t_pac = t_rr[pac_indices]
-
-    print("Detected PAC candidates:", len(pac_indices))
-
-    return pac_indices, t_pac
+    return pac_locs
 
 #%% 
 #  QRS visual validation
@@ -332,6 +344,85 @@ def plot_envelope_check(envelope, t, locs, fs, start_sec=1000, duration=10, titl
     plt.ylabel("Envelope")
     plt.xlabel("Time")
     plt.grid(True)
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+    plt.tight_layout()
+    plt.show()
+
+
+#%%
+# Plot RR intervals with PAC markers
+# ---------------------------
+def plot_rr_with_pac(t_rr, RR, pac_idx, title):
+
+    plt.figure(figsize=(12,4))
+
+    plt.plot(t_rr, RR, '.', markersize=2, label="RR interval")
+
+    plt.plot(
+        t_rr[pac_idx],
+        RR[pac_idx],
+        'ro',
+        markersize=4,
+        label="PAC"
+    )
+
+    plt.ylabel("RR interval (s)")
+    plt.xlabel("Time")
+
+    plt.title(title)
+
+    plt.legend()
+
+    plt.grid(True)
+
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+
+    plt.show()
+
+#%%
+#%%
+# Plot ECG with PAC markers
+
+def plot_ecg_with_pac(ecg, t, locs, pac_locs, fs, pac_index=0, window_sec=10):
+    """
+    Richeert de grafiek automatisch op een gevonden PAC, in plaats van 
+    op een willekeurige tijd.
+    """
+    if len(pac_locs) == 0:
+        print("Geen PACs om te plotten!")
+        return
+
+    # Zoek de locatie van de specifieke PAC (standaard de eerste: index 0)
+    center_loc = pac_locs[pac_index]
+    
+    # Bereken het window: 5 seconden vóór de PAC, en 5 seconden erna
+    start = int(center_loc - (window_sec / 2) * fs)
+    end = int(center_loc + (window_sec / 2) * fs)
+    
+    # Voorkom dat we buiten de data vallen
+    start = max(0, start)
+    end = min(len(ecg), end)
+
+    # Filter de markers voor dit specifieke window
+    mask_qrs = (locs >= start) & (locs < end)
+    mask_pac = (pac_locs >= start) & (pac_locs < end)
+
+    plt.figure(figsize=(12, 4))
+    plt.plot(t[start:end], ecg[start:end], linewidth=1, color='tab:blue', label="Filtered ECG")
+    
+    # Plot QRS en PACs
+    plt.plot(t[locs[mask_qrs]], ecg[locs[mask_qrs]], 'k*', markersize=6, label="QRS (Normaal)")
+    
+    if np.any(mask_pac):
+        plt.plot(t[pac_locs[mask_pac]], ecg[pac_locs[mask_pac]], 'ro', markersize=8, label="PAC")
+
+    plt.title(f"ECG Ingezoomd op PAC #{pac_index + 1}")
+    plt.ylabel("ECG (mV)")
+    plt.xlabel("Tijd")
+    plt.grid(True)
+    plt.legend(loc="upper right")
+    
+    # Zorg dat de x-as leesbaar blijft met uren, minuten en seconden
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
     plt.tight_layout()
     plt.show()
@@ -435,4 +526,42 @@ plot_envelope_check(
     duration=10,
 )
 # %%
+# ==========================================================
+# Recording 1 
+# ==========================================================
+print("\nProcessing Recording 1 (PACs + PVCs)")
 
+ecg1, fs1, t1 = read_and_clean_ecg_mat(path1)
+filtered1 = apply_clinical_bandpass(ecg1, fs1)
+locs1, envelope1 = detect_r_peaks(filtered1, fs1, plotresult=False, t_chunk=t1)
+RR1, t_rr1 = compute_rr_intervals(locs1, t1)
+
+plot_heart_rate(t_rr1, RR1, "Heart Rate – Recording 1")
+rr_stats1 = analyze_qrs_regularity(t_rr1, RR1)
+plot_rr_variability(rr_stats1, "RR variability – Recording 1")
+
+# --- HIER IS DE FIX VOOR RECORDING 1 ---
+pac_locs1 = detect_pac(RR1, t_rr1, locs1, t1)
+# Plot de 1e gevonden PAC (index 0)
+plot_ecg_with_pac(filtered1, t1, locs1, pac_locs1, fs1, pac_index=0)
+
+
+# ==========================================================
+# Recording 2
+# ==========================================================
+print("\nProcessing Recording 2 (Only PACs)")
+
+ecg2, fs2, t2 = read_and_clean_ecg_mat(path2)
+filtered2 = apply_clinical_bandpass(ecg2, fs2)
+locs2, envelope2 = detect_r_peaks(filtered2, fs2, plotresult=False, t_chunk=t2)
+RR2, t_rr2 = compute_rr_intervals(locs2, t2)
+
+plot_heart_rate(t_rr2, RR2, "Heart Rate – Recording 2")
+rr_stats2 = analyze_qrs_regularity(t_rr2, RR2)
+plot_rr_variability(rr_stats2, "RR variability – Recording 2")
+
+# --- HIER IS DE FIX VOOR RECORDING 2 ---
+pac_locs2 = detect_pac(RR2, t_rr2, locs2, t2)
+# Plot de 5e gevonden PAC (index 4) om te kijken of die ook klopt
+plot_ecg_with_pac(filtered2, t2, locs2, pac_locs2, fs2, pac_index=4)
+# %%
