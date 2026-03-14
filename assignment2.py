@@ -16,7 +16,7 @@ from scipy import signal
 
 LEADS = ['I','II','III','AVR','AVL','AVF','V1','V2','V3','V4','V5','V6']
 
-# DEFINE PATHS (Ensure these are correct for your local machine)
+# DEFINE PATHS 
 path1 = r"/Users/cathelijnedeneke/Desktop/TM 2025:2026/Q3/Advanced signal processing /Erasmus deel/Assignment 2 /004_Groenewoud_PACs+PVCs.mat"
 path2 = r"/Users/cathelijnedeneke/Desktop/TM 2025:2026/Q3/Advanced signal processing /Erasmus deel/Assignment 2 /004_Groenewoud_PACs.mat"
 
@@ -149,6 +149,22 @@ def plot_single_validation(ecg, t, locs, target_locs, fs, title, marker_color, m
     plt.tight_layout()
     plt.show()
 
+def plot_heart_rate(t_rr, RR, title):
+    """
+    Genereert een Tachogram om de verandering in hartfrequentie over tijd te laten zien.
+    """
+    hr = 60 / RR
+    plt.figure(figsize=(12, 3))
+    plt.plot(t_rr, hr, '.', markersize=2, color='tab:blue', alpha=0.6)
+    plt.ylabel("Heart Rate (BPM)")
+    plt.xlabel("Time")
+    plt.title(title)
+    plt.ylim(30, 200) # Fysiologische grenzen
+    plt.grid(True)
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    plt.tight_layout()
+    plt.show()
+
 #%%
 # 4. EXECUTION PIPELINE
 # ==========================================================
@@ -185,8 +201,7 @@ true_pac_locs1, true_pvc_locs1 = classify_ectopic_beats_matched(ynon1, raw_pac_l
 plot_20_sec_segment(filtered1, t1, fs1, start_sec=1000, title="Recording 1: 20-Second Filtered ECG Segment")
 plot_single_validation(filtered1, t1, locs1, true_pac_locs1, fs1, "Recording 1: PAC Validation (Narrow Complex)", marker_color='ro', marker_label="PAC")
 plot_single_validation(filtered1, t1, locs1, true_pvc_locs1, fs1, "Recording 1: PVC Validation (Wide/Bizarre Complex)", marker_color='s', marker_label="PVC") # 's' makes an orange square
-
-
+plot_heart_rate(t_rr1, RR1, "Recording 1: Ventricular Rate Profile (BPM over Time)")
 # ----------------------------------------------------------
 # RECORDING 2: Isolated Atrial Ectopy (PACs only)
 # ----------------------------------------------------------
@@ -213,5 +228,6 @@ true_pac_locs2, true_pvc_locs2 = classify_ectopic_beats_matched(ynon2, raw_pac_l
 # 3. Plots for Recording 2
 plot_20_sec_segment(filtered2, t2, fs2, start_sec=2000, title="Recording 2: 20-Second Filtered ECG Segment")
 plot_single_validation(filtered2, t2, locs2, true_pac_locs2, fs2, "Recording 2: PAC Validation (Narrow Complex)", marker_color='ro', marker_label="PAC")
+plot_heart_rate(t_rr2, RR2, "Recording 2: Ventricular Rate Profile (BPM over Time)")
 # NO PVC PLOT FOR RECORDING 2 AS REQUESTED
 # %%
