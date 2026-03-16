@@ -1408,8 +1408,9 @@ def classify_pac_runs(pac_indices):
 # ==========================================================
 
 # DEFINE PATHS (Ensure these are correct for your local machine)
-path1 = (r"/Users/tesselvanbergenhenegouwen/TM12005 Cardio/004_Groenewoud_PACs+PVCs.mat")
-path2 = (r"/Users/tesselvanbergenhenegouwen/TM12005 Cardio/004_Groenewoud_PACs.mat")
+path1 = r"/Users/cathelijnedeneke/Desktop/TM 2025:2026/Q3/Advanced signal processing /Erasmus deel/Assignment 2 /004_Groenewoud_PACs+PVCs.mat"
+path2 = r"/Users/cathelijnedeneke/Desktop/TM 2025:2026/Q3/Advanced signal processing /Erasmus deel/Assignment 2 /004_Groenewoud_PACs.mat"
+
 #%%
 # ----------------------------------------------------------
 # Recording 1: Complex Arrhythmia (PACs + PVCs)
@@ -1452,7 +1453,6 @@ plot_ecg_pac_vs_pvc(filtered1, t1, locs1,
                      pac_locs1, pvc_locs1, fs1, event_index=0)
 
 # 2. AF Detectie (NIEUW)
-af_episodes1 = detect_af_episodes(RR1, t_rr1)
 af_locs1 = detect_af_candidates(RR1, t_rr1, locs1, t1)
 # Plot de eerste AF slag (index 0) om het verschil met een PAC te zien
 if len(af_locs1) > 0:
@@ -1527,7 +1527,6 @@ plot_ecg_pac_vs_pvc(filtered2, t2, locs2,
                      pac_locs2, pvc_locs2, fs2, event_index=0)
 
 # 2. AF Detectie (NIEUW)
-af_episodes2 = detect_af_episodes(RR2, t_rr2)
 af_locs2 = detect_af_candidates(RR2, t_rr2, locs2, t2)
 # Plot de eerste AF slag (index 0) om het verschil met een PAC te zien
 if len(af_locs2) > 0:
